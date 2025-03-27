@@ -4,7 +4,7 @@
 
 Let's see a problem that takes time, adding up the first billion numbers. 
 
-In python you can do it by using a loop. 
+In Python you can do it by using a loop. 
 
 ```python
 import time
@@ -20,7 +20,7 @@ print(f"Loop total: {total_loop}")
 print(f"Loop time: {time.time() - start} s")
 ```
 
-Note that it took some time even on a strong machine. Let's try the same with python's native sum() function.
+Note that it took some time even on a strong machine. Let's try the same with Python's native `sum()` function.
 
 ```python
 start = time.time()
@@ -28,7 +28,7 @@ total_sum = sum(range(N))
 print(f"Sum total: {total_sum}")
 print(f"Sum time: {time.time() - start} s")
 ```
-This was much faster. When python runs this function, there is a low level language running in the background, similar to this C++ script:
+This was much faster. When python runs this function, there is a low level language running in the background, similar to this `C++` script:
 
 ```cpp
 #include <iostream>
@@ -71,7 +71,7 @@ println(total)
 
 You may notice that the runtime was extremely low. But how can it be even faster than a language close to machine code?
 
-In scientific computing languages like Julia, many mathematical patterns are recognized and mapped to hardcoded optimizations. In this case, Julia detects that ranges like (n:m) are a special case for sum() and uses a fast, pre-optimized formula instead of looping.
+In scientific computing languages like Julia, many mathematical patterns are recognized and mapped to hardcoded optimizations. In this case, Julia detects that ranges like `(n:m)` are a special case for `sum()` and uses a fast, pre-optimized formula instead of looping (here a `UnitRange` method).
 
 Conceptually, this is similar to the trick the little Gauss allegedly used to sum numbers quickly:
 
@@ -88,4 +88,247 @@ print(f"Sum time: {time.time() - start} s")
 ```
 
 See?
+
+### Self Check
+When is it worth to use a compiled languge?
+Why is Python widely used in scientific tasks despite its slow performance?
+What makes Julia "as easy as Python and as fast as C"?
+What happens when you sum random numbers instead of a range?
+
+## Introduction to parallel computing
+Let's add up 100 thousand random numbers.
+
+```python
+from time import time
+from random import random, seed
+random.seed(42)
+
+start = time()
+print(sum([random.random() for _ in range(100_000_000)]))
+print(time() - start)
+```
+
+It's trivial that if you do only a fraction of the task, it takes less time. If you split the work into multiple chunks and send out the tasks to each thread of your `CPU`, they can process them simultaneously. 
+
+> **SIDE NOTE**
+> The terms `core` and `thread` are often used interchangeably. A `core` is a physical processing unit,
+> transistors on the chip itself. While a `thread` is a virtual processing unit. The calculation that runs on the transistors.
+> Like body and soul.
+> Traditionally, one `core` runs one `thread`.
+> However, some CPUs are capable of running multiple threads simultaneously on each core.
+> (Intel calls it hyperthreading, AMD calls it SMT - Simultaneous Multihreading… Macs use a very different
+> approach that is beyond the scope of this class.)
+
+ The following code can show both physical (core) and logical (thread) CPU counts:
+
+ ```python
+import psutil
+print("Logical CPUs (threads):", psutil.cpu_count(logical=True))
+print("Physical cores:", psutil.cpu_count(logical=False))
+```
+However, it's more practical to just call
+
+```python
+os.cpu_count()
+```
+If you want to optimize your runs, it is important that your task is not divided into more chunks than the number of your logical CPU units. 
+
+During parallel computing, the processing of one "chunk" is called a **worker**. A group of workers is a **pool**. It acts like a manager that distributes the work among them. In Python you can use the `multiprocessing` module to create a pool of workers. 
+
+```mermaid
+flowchart TD
+    A[Main Process Starts] --> B[Create Queue q]
+    B --> C[Split N into chunks]
+    C --> D1[Start Process 1: generate_and_sum - chunk]
+    C --> D2[Start Process 2: generate_and_sum - chunk]
+    C --> D3[Start Process 3: generate_and_sum - chunk]
+    C --> D4[Start Process 4: generate_and_sum - chunk]
+
+    D1 --> E1[Put result into Queue]
+    D2 --> E2[Put result into Queue]
+    D3 --> E3[Put result into Queue]
+    D4 --> E4[Put result into Queue]
+
+    E1 --> F[Main Process Waits - join all]
+    E2 --> F
+    E3 --> F
+    E4 --> F
+
+    F --> G[Main Process reads from Queue]
+    G --> H[Sum up results]
+    H --> I[Print Total and Time]
+```
+
+You can find this code in the `sum_random_mulitprocessing.py` script.
+
+```python
+from multiprocessing import Process, Queue
+import random
+from time import time
+
+# Worker function: does the job and puts the result into a queue
+
+def generate_and_sum(n, output_queue):
+    total = sum(random.random() for _ in range(n))
+    output_queue.put(total)
+
+if __name__ == "__main__":
+    N = 100_000_000
+    num_workers = 4 # Or set it based on your CPU count
+    chunk_size = N // num_workers
+    # Queue to collect results
+	q = Queue()
+	processes = []
+
+	start = time()
+	# Launch processes manually
+    for _ in range(num_workers):
+		p = Process(target=generate_and_sum, args=(chunk_size, q))
+		p.start()
+		processes.append(p)
+
+	# Wait for all processes to finish
+		for p in processes:
+            p.join()
+	
+    # Collect results from the queue
+    total = 0
+    while not q.empty():
+        total += q.get()
+
+    print(f"Total: {total}")
+    print(f"Time: {time() - start:.2f} s")
+
+```
+
+You can also find a much neater code using the `ProcessPoolExecutor` method of the `concurrent.futures` package. The two codes are very similar under the hood.
+
+```python
+from concurrent.futures import ProcessPoolExecutor
+import random
+from time import time
+import os
+
+# Function that each worker runs
+def generate_and_sum(n):
+    return sum(random.random() for _ in range(n))
+
+if __name__ == "__main__":
+    N = 100_000_000
+    num_workers = 4
+    chunk_size = N // num_workers
+
+    start = time()
+
+    # Start parallel execution
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        results = executor.map(generate_and_sum, [chunk_size] * num_workers)
+
+    total = sum(results)
+    print(f"Total: {total}")
+    print(f"Time: {time() - start:.2f} s")
+
+```
+
+### Amdahl's Law
+It might be tempting to check whether you get faster results if you go beyond the CPU count. To some degree this might even be true due to factors beyond the scope of this class. Eg. you have 8 CPU threads and you set the number of workers to 10. However, if you increase the number of workers even further (eg. 100), you'll notice no difference in performance.
+
+If only part of your code can run in parallel, then no matter how many workers you add, the rest still runs in order — so your speedup hits a wall.
+
+![amdahl.png](img/amdahl.png)
+
+$S(N) = \frac{1}{(1 - P) + \frac{P}{N}}$  
+where:  
+- $S(N)$ = theoretical speedup with $N$ processors  
+- $N$ = number of processors (or cores)  
+- $P$ = proportion of the task that can be parallelized (between 0 and 1)
+
+If **P = 0**, then no part can be parallelized, and ( S = 1 ) (no speedup).
+If **P = 1**, the entire task is parallelizable, and ( S = N ) (ideal linear speedup).
+For most real-world tasks, **0 < P < 1**, so speedup is limited even with many processors.
+
+In simpler terms, splitting a job across 100 workers means each one does less, but managing those workers takes time too. This lies in the concept of the **overhead**.
+
+### Overhead
+When we split up a task and run it in parallel, the computer has to do more than just "run stuff faster."\
+There’s **extra work** involved — and that extra work is what we call **overhead**. So basically all the additional costs of the work, such as:
+- creating processes (also known as "spawning")
+- transferring data from one process to the other
+- merging results
+- context switching (when there are more tasks than cores, CPU keeps jumping between tasks)
+- etc.
+
+Overhead can get disproportionately huge. It's especially noticeable when you do small tasks, the workload is heavily unbalanced or there is a lot of communication going on between workers. 
+
+### Task Parallelism vs Data Parallelism
+So far we've seen how a work can be split into chunks for parallel computing. However, there is a difference between doing the same work on different chunks of data (**data parallelism**) or splitting the work by logical tasks (**task parallelism**).
+
+Imagine you have a genetic sequence on which you need to compute GC content. 
+Data parallelism is when you run the same task on different chunks of the data, eg:
+```python
+def compute_gc_content(sequence):
+    return sum(base in "GC" for base in sequence) / len(sequence)
+```
+> In the `optimization_class.ipynb` you can find a FASTA generator. Run that cell.
+> There's also a `gc_content.py` script that compares the task done on a single thread or on as many as possible.
+
+Task parallelism when you run different tasks simultaneously. Eg.
+
+```python
+```python
+def align_sequences(): ...
+def extract_metadata(): ...
+def fastq_to_fasta(): ...
+```
+
+### When not to parallelize?
+In some cases it's objectively doesn't make sense: when tasks need to run sequentially. Eg.
+
+```python
+def load_data(): ...
+def clean_data(): ...
+def analyze(): ...
+def save_results(): ...
+```
+These steps typically depend on each other, so they run one after the other.
+
+However, in **advanced pipelines** (e.g., with real-time data streams or batching), some parts might be overlapped or combined with **data parallelism** for optimization.
+
+In other cases, even if parallelism is **technically possible**, it may **not be worth it** — if the overhead is too high compared to the gain.
+
+### Self Check
+- What limits how many workers you should use?
+- Why is `ProcessPoolExecutor` easier than `multiprocessing.Process`?
+- Why doesn't 100 workers make your code 100× faster?
+- Do you need task or data parallelism for the followings: lots of independent data, data pipeline, mixed workload, web scraping, matrix multiplication
+
+### Sample answers
+When is it worth to use a compiled languge?
+When performance is critical — like in simulations, large-scale data processing, or real-time systems. Compiled code runs faster because it's translated to machine instructions ahead of time.
+
+Why is Python widely used in scientific tasks despite its slow performance?
+Because it's easy to learn, has a huge ecosystem (NumPy, pandas, SciPy), and many performance bottlenecks are handled by libraries written in compiled languages (like C under the hood). Also, prototyping is fast.
+
+What makes Julia "as easy as Python and as fast as C"?
+Julia is high-level and readable like Python, but it uses just-in-time (JIT) compilation to generate efficient machine code, making it suitable for performance-heavy tasks without switching to C or Fortran.
+
+What limits how many workers you should use?
+The number of logical CPU threads and the overhead of managing parallel tasks.
+
+Why is `ProcessPoolExecutor` easier than `multiprocessing.Process`?
+It automatically manages the creation, starting, joining, and cleanup of processes — so you don’t have to do it manually. It's higher-level and less error-prone.
+
+Why doesn't 100 workers make your code 100× faster?
+Only part of your code can be parallelized, and the rest still runs sequentially. Plus, overhead increases with more workers. See Amdahl's Law.
+
+Do you need task or data parallelism for the followings: lots of independent data, data pipeline , mixed workload, web scraping, matrix multiplication
+
+| Scenario                  | Type                   | Notes                                                                 |
+|---------------------------|------------------------|-----------------------------------------------------------------------|
+| Lots of independent data  | Data Parallelism (DP)  | Same task repeated on chunks of data                                  |
+| Data pipeline             | Task Parallelism (TP)  | Each step is a different task; could also combine with DP via batching |
+| Mixed workload            | Task Parallelism (TP)  | Different jobs/tasks, not just one function                            |
+| Web scraping              | Task Parallelism (TP)  | Each worker handles a different site/page (or task chain)             |
+| Matrix multiplication     | Data Parallelism (DP)  | Same operation on independent matrix chunks                           |
+
 
