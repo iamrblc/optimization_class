@@ -1,5 +1,136 @@
 # Introduction to Optimization
 
+## Optimization Tradeoffs: Speed vs Memory vs Readability
+
+In data-heavy computing (hello bioinformatics) you often face tradeoffs between: speed, memory usage and code readibility. 
+
+Pick one… or maybe two… 
+
+### Python list vs NumPy array
+
+```python
+from sys import getsizeof
+import numpy as np
+
+py_list = list(range(100000))
+np_array = np.array(range(100000))
+
+list_total = getsizeof(py_list) + sum(getsizeof(x) for x in py_list)
+np_total = getsizeof(np_array) + np_array.nbytes
+
+print(f"Python list total size: {list_total / 1024:.2f} KB")
+print(f"NumPy array total size: {np_total / 1024:.2f} KB")
+```
+
+When you create the list above, you also create a container (the list object itself) and a bunch of Python integer objects in memory along with pointers (references) to those objects. 
+
+Also, each number takes up 28 bytes in the memory (even single digit integers) which is a waste of memory space. 
+
+On the other hand, when you create the numpy array, you just create one chunk of memory where you store all the values as simple fixed-size types. An int32 value takes up 4 bytes only. 
+
+You can specifially choose the NumPy type to further optimize. 
+
+| NumPy Type   | Bytes per item | Dtype Code | Python Equivalent | Notes                              |
+|--------------|----------------|------------|--------------------|------------------------------------|
+| `int8`       | 1              | `i1`       | small integers     | Range: -128 to 127                 |
+| `int16`      | 2              | `i2`       | medium integers    | Rarely used                       |
+| `int32`      | 4              | `i4`       | `int`              | Standard for large datasets       |
+| `int64`      | 8              | `i8`       | big integers       | May be overkill for most          |
+| `float32`    | 4              | `f4`       | `float`            | Less precise, more compact        |
+| `float64`    | 8              | `f8`       | `float` (default)  | High precision, default           |
+| `bool`       | 1              | `?`        | `bool`             | True/False                        |
+| `str` / `U10`| Varies         | `U10`      | `str`              | Fixed-length Unicode strings (10 chars × 4 bytes) |
+
+### Memory Tracking (optional)
+
+Be very careful with the script below. It might crash your system by allocating a huge list in the memory.
+
+```python
+import tracemalloc
+
+tracemalloc.start()
+
+# Allocate something biiiiiiiig
+huge_list = [0] * 10_000_000
+
+current, peak = tracemalloc.get_traced_memory()
+print(f"Current memory usage: {current / 10**6:.2f} MB")
+print(f"Peak memory usage: {peak / 10**6:.2f} MB")
+tracemalloc.stop()
+```
+
+What happens when memory runs out? The program crashes with `MemoryError` or your OS uses **swap** (slower virtual memory on disk). The same thing happens when you try to load a huge excel file and your computer goes brrr.
+
+### Self Check
+
+Why can’t we always write the fastest, cleanest, and most memory-efficient code?
+What makes NumPy more memory-efficient than a Python list?
+What happens when your program exceeds RAM?
+
+## Data Structures
+
+Let’s say we have genomic data like this:
+
+```python
+example = [
+    {"chrom": "chr1", "start": 100, "end": 200},
+    {"chrom": "chr2", "start": 300, "end": 400},
+]
+```
+We can store this in various ways.
+
+```python
+# Compare data structures
+
+# Python list of dictionaries
+py_dicts = [
+    {"chrom": "chr1", "start": 100, "end": 200},
+    {"chrom": "chr2", "start": 300, "end": 400},
+]
+# List of tuples
+py_tuples = [
+    ("chr1", 100, 200),
+    ("chr2", 300, 400),
+]
+# NumPy array
+import numpy as np
+np_array = np.array([
+    ["chr1", 100, 200],
+    ["chr2", 300, 400],
+])
+# Pandas DataFrame
+import pandas as pd
+
+df = pd.DataFrame({
+    "chrom": ["chr1", "chr2"],
+    "start": [100, 300],
+    "end": [200, 400],
+})
+```
+
+But if we check the sizes, something weird happens:
+
+Python list of dicts: 978 bytes
+Python list of tuples: 418 bytes
+NumPy array (object dtype): 1136 bytes
+Pandas DataFrame: 286 bytes
+
+If the numpy array is mixed, it stores everything in unicode. We need to explicitly define what data should be stored in what type.
+
+```python
+dtype = [("chrom", "U4"), ("start", "i4"), ("end", "i4")]
+np_array_optimized = np.array([
+    ("chr1", 100, 200),
+    ("chr2", 300, 400),
+], dtype=dtype)
+```
+Now this is only 208 bytes. 
+
+### Self Check
+Which structure is usually the most memory-efficient?
+Which structure is easiest to read and write in Python?
+Why does structure matter when working with large data?
+
 ## Picking the right language
 
 Let's see a problem that takes time, adding up the first billion numbers. 
@@ -302,26 +433,74 @@ In other cases, even if parallelism is **technically possible**, it may **not be
 - Why doesn't 100 workers make your code 100× faster?
 - Do you need task or data parallelism for the followings: lots of independent data, data pipeline, mixed workload, web scraping, matrix multiplication
 
+## Next step: The GPU (Graphical Processing Unit)
+GPU is like CPU on steroids with hundreds or thousands of threads on each core. Originally it was developed for - surprise! - graphics, but due to its speed now it's widely used for scientific computing, Machine Learning, or as most people would recall it: bitcoin mining (which technically is a series of computationally expensive processes).
+
+Let's see a little comparison:
+
+| Feature    | CPU                         | GPU                                 |
+|------------|-----------------------------|--------------------------------------|
+| Cores      | Few, powerful               | Many, lightweight                    |
+| Threads    | Limited                     | Thousands                            |
+| Good for   | Complex logic, serial tasks | Repetitive math on big datasets      |
+| Bio use    | Pipelines, pre/postprocessing | ML, image analysis, deep nets     |
+
+BUT! No - or little compatibility - between platforms. (Eg. NVIDIA uses CUDA, Apple's METAL API supports PyTorch or Tensorflow - more or less, AMD is… well… limited.)
+
+In `PyTorch` switching is easy:
+
+```python
+import torch
+device = torch.device("mps")  # mps is for Mac. For NVDIA use "cuda", or use "cpu" if needed
+tensor = torch.ones((1000, 1000), device=device)
+```
+
+For an example code see `gc_content_gpu.py`.
+
+### GPU limitations
+Not ideal for simple tasks. 
+Transferring data from and to GPU is slow (overhead!)
+On Mac it may be slower than CPU in some cases.
+
 ### Sample answers
-When is it worth to use a compiled languge?
+
+**Why can’t we always write the fastest, cleanest, and most memory-efficient code?**\
+Because optimization involves tradeoffs — improving one often worsens another.
+
+**What makes NumPy more memory-efficient than a Python list?**\
+NumPy stores data in a compact, fixed-type array rather than a list of references to objects.
+
+**What happens when your program exceeds RAM?**\
+The OS may start using swap space (slow disk-based memory), or the program crashes.
+
+**Which structure is usually the most memory-efficient?**\
+NumPy arrays — especially when using fixed data types.
+
+**Which structure is easiest to read and write in Python?**\
+Dictionaries or pandas DataFrames.
+
+**Why does structure matter when working with large data?**\
+Because it affects memory usage, speed of iteration, and ease of parallelization.
+
+**When is it worth to use a compiled language?**\
 When performance is critical — like in simulations, large-scale data processing, or real-time systems. Compiled code runs faster because it's translated to machine instructions ahead of time.
 
-Why is Python widely used in scientific tasks despite its slow performance?
+**Why is Python widely used in scientific tasks despite its slow performance?**\
 Because it's easy to learn, has a huge ecosystem (NumPy, pandas, SciPy), and many performance bottlenecks are handled by libraries written in compiled languages (like C under the hood). Also, prototyping is fast.
 
-What makes Julia "as easy as Python and as fast as C"?
+**What makes Julia "as easy as Python and as fast as C"?**\
 Julia is high-level and readable like Python, but it uses just-in-time (JIT) compilation to generate efficient machine code, making it suitable for performance-heavy tasks without switching to C or Fortran.
 
-What limits how many workers you should use?
+**What limits how many workers you should use?**\
 The number of logical CPU threads and the overhead of managing parallel tasks.
 
-Why is `ProcessPoolExecutor` easier than `multiprocessing.Process`?
+**Why is `ProcessPoolExecutor` easier than `multiprocessing.Process`?**\
 It automatically manages the creation, starting, joining, and cleanup of processes — so you don’t have to do it manually. It's higher-level and less error-prone.
 
-Why doesn't 100 workers make your code 100× faster?
+**Why doesn't 100 workers make your code 100× faster?**\
 Only part of your code can be parallelized, and the rest still runs sequentially. Plus, overhead increases with more workers. See Amdahl's Law.
 
-Do you need task or data parallelism for the followings: lots of independent data, data pipeline , mixed workload, web scraping, matrix multiplication
+**Do you need task or data parallelism for the followings: lots of independent data, data pipeline , mixed workload, web scraping, matrix multiplication**
 
 | Scenario                  | Type                   | Notes                                                                 |
 |---------------------------|------------------------|-----------------------------------------------------------------------|
