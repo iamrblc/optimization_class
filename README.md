@@ -1,4 +1,6 @@
 # Introduction to Optimization
+If you have any questions: rblc@staff.elte.hu
+Also, after class I recommended [this introductory computer science course](https://pll.harvard.edu/course/cs50-introduction-computer-science) from Harvard. It is completely free and gives you a solid conceptual understanding of programming. 
 
 ## Optimization Tradeoffs: Speed vs Memory vs Readability
 
